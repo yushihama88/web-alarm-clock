@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>アラーム</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      transition: background 0.4s;
+    }
+
+    body.ringing { animation: pulse-bg 0.8s ease-in-out infinite alternate; }
+
+    @keyframes pulse-bg {
+      from { background: #1a1a2e; }
+      to   { background: #3a0a0a; }
+    }
+
+    h1 { font-size: 1.2rem; letter-spacing: 0.2em; color: #aaa; margin-bottom: 2rem; }
+
+    .clock {
+      font-size: 5.5rem;
+      font-weight: 200;
+      letter-spacing: 0.04em;
+      font-variant-numeric: tabular-nums;
+      color: #e0e0e0;
+      margin-bottom: 2.5rem;
+    }
+
+    .alarm-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.2rem;
+    }
+
+    .alarm-label { font-size: 0.85rem; color: #888; letter-spacing: 0.12em; }
+
+    .alarm-time-row {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+    }
+
+    input[type="time"] {
+      padding: 0.5rem 0.8rem;
+      font-size: 1.6rem;
+      background: #16213e;
+      border: 1px solid #444;
+      border-radius: 8px;
+      color: #eee;
+      outline: none;
+      font-variant-numeric: tabular-nums;
+      color-scheme: dark;
+    }
+
+    input[type="time"]:focus { border-color: #4fc3f7; }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #444;
+      transition: background 0.3s;
+    }
+
+    .status-dot.on { background: #4fc3f7; box-shadow: 0 0 6px #4fc3f7; }
+    .status-dot.ringing { background: #ff6b6b; box-shadow: 0 0 10px #ff6b6b; animation: blink 0.5s step-start infinite; }
+
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .buttons { display: flex; gap: 0.8rem; margin-top: 0.4rem; }
+
+    button {
+      padding: 0.65rem 1.8rem;
+      font-size: 0.95rem;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+
+    button:active { transform: scale(0.96); }
+    button:disabled { opacity: 0.3; cursor: default; }
+
+    #btnToggle { background: #4fc3f7; color: #000; min-width: 110px; }
+    #btnToggle.active { background: #ffa726; }
+    #btnSnooze { background: #7e57c2; color: #fff; }
+    #btnDismiss { background: #ff6b6b; color: #fff; }
+
+    .ring-buttons { display: flex; gap: 0.8rem; margin-top: 0.6rem; }
+
+    .next-alarm {
+      font-size: 0.8rem;
+      color: #666;
+      margin-top: 0.6rem;
+      min-height: 1.1em;
+    }
+
+    .next-alarm.on { color: #4fc3f7; }
+  </style>
+</head>
+<body>
+  <h1>ALARM</h1>
+
+  <div class="clock" id="clock">00:00:00</div>
+
+  <div class="alarm-section">
+    <div class="alarm-label">アラーム時刻</div>
+
+    <div class="alarm-time-row">
+      <div class="status-dot" id="statusDot"></div>
+      <input type="time" id="alarmInput" value="07:00">
+    </div>
+
+    <div class="buttons">
+      <button id="btnToggle">セット</button>
+    </div>
+
+    <div class="ring-buttons" id="ringButtons" style="display:none">
+      <button id="btnSnooze">スヌーズ (+5分)</button>
+      <button id="btnDismiss">解除</button>
+    </div>
+
+    <div class="next-alarm" id="nextAlarm"></div>
+  </div>
+
+  <script>
+    const clockEl   = document.getElementById('clock');
+    const inputEl   = document.getElementById('alarmInput');
+    const btnToggle = document.getElementById('btnToggle');
+    const dot       = document.getElementById('statusDot');
+    const ringBtns  = document.getElementById('ringButtons');
+    const nextEl    = document.getElementById('nextAlarm');
+    const btnSnooze = document.getElementById('btnSnooze');
+    const btnDismiss= document.getElementById('btnDismiss');
+
+    let armed    = false;
+    let ringing  = false;
+    let alarmHH  = 7;
+    let alarmMM  = 0;
+    let audioCtx = null;
+    let ringIntervalId = null;
+
+    function getAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    }
+
+    function playBeep() {
+      const ctx = getAudioCtx();
+      const pattern = [0, 0.2, 0.4, 0.8, 1.0, 1.2];
+      pattern.forEach(t => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.4, ctx.currentTime + t);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.15);
+        o.start(ctx.currentTime + t);
+        o.stop(ctx.currentTime + t + 0.15);
+      });
+    }
+
+    function startRinging() {
+      ringing = true;
+      document.body.classList.add('ringing');
+      dot.className = 'status-dot ringing';
+      ringBtns.style.display = 'flex';
+      btnToggle.disabled = true;
+      inputEl.disabled = true;
+      nextEl.textContent = '⏰ アラーム発動中！';
+      nextEl.className = 'next-alarm';
+      playBeep();
+      ringIntervalId = setInterval(playBeep, 2000);
+    }
+
+    function stopRinging() {
+      ringing = false;
+      clearInterval(ringIntervalId);
+      document.body.classList.remove('ringing');
+      ringBtns.style.display = 'none';
+      btnToggle.disabled = false;
+      inputEl.disabled = false;
+    }
+
+    function disarm() {
+      armed = false;
+      stopRinging();
+      dot.className = 'status-dot';
+      btnToggle.textContent = 'セット';
+      btnToggle.classList.remove('active');
+      nextEl.textContent = '';
+      nextEl.className = 'next-alarm';
+    }
+
+    function arm() {
+      const val = inputEl.value;
+      if (!val) return;
+      [alarmHH, alarmMM] = val.split(':').map(Number);
+      armed = true;
+      dot.className = 'status-dot on';
+      btnToggle.textContent = 'キャンセル';
+      btnToggle.classList.add('active');
+      updateNextAlarmText();
+    }
+
+    function updateNextAlarmText() {
+      if (!armed || ringing) return;
+      const now = new Date();
+      const target = new Date(now);
+      target.setHours(alarmHH, alarmMM, 0, 0);
+      if (target <= now) target.setDate(target.getDate() + 1);
+      const diff = Math.round((target - now) / 60000);
+      const h = Math.floor(diff / 60);
+      const m = diff % 60;
+      nextEl.textContent = h > 0
+        ? `あと ${h}時間 ${m}分`
+        : `あと ${m}分`;
+      nextEl.className = 'next-alarm on';
+    }
+
+    btnToggle.addEventListener('click', () => {
+      if (armed) disarm(); else arm();
+    });
+
+    btnDismiss.addEventListener('click', () => {
+      disarm();
+    });
+
+    btnSnooze.addEventListener('click', () => {
+      stopRinging();
+      const d = new Date();
+      d.setMinutes(d.getMinutes() + 5);
+      alarmHH = d.getHours();
+      alarmMM = d.getMinutes();
+      const hh = String(alarmHH).padStart(2, '0');
+      const mm = String(alarmMM).padStart(2, '0');
+      inputEl.value = `${hh}:${mm}`;
+      armed = true;
+      dot.className = 'status-dot on';
+      btnToggle.textContent = 'キャンセル';
+      btnToggle.classList.add('active');
+      updateNextAlarmText();
+    });
+
+    function tick() {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      clockEl.textContent = `${hh}:${mm}:${ss}`;
+
+      if (armed && !ringing) {
+        if (now.getHours() === alarmHH && now.getMinutes() === alarmMM && now.getSeconds() === 0) {
+          startRinging();
+        } else {
+          if (now.getSeconds() === 0) updateNextAlarmText();
+        }
+      }
+    }
+
+    setInterval(tick, 1000);
+    tick();
+  </script>
+</body>
+</html>
